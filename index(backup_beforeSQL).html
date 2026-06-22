@@ -2727,123 +2727,6 @@
     const DASHBOARD_STORAGE_PREFIX = 'ulink_new_dashboard_v1_';
     function cfgKey(name) { return DASHBOARD_STORAGE_PREFIX + name; }
 
-    // Ulink Non-Medical Tourism Supabase mapping
-    const TABLE_CONVERSATIONS = 'nonmedical_conversations';
-    const TABLE_MESSAGES = 'nonmedical_messages';
-    const TABLE_N8N_HISTORY = 'nonmedical_n8n_chat_histories';
-    const TABLE_TEMPLATE_SENDS = 'nonmedical_template_sends';
-    const STORAGE_BUCKET = 'non-medical_tourism';
-
-    function normalizeRole(value) {
-      const v = String(value || '').toLowerCase();
-      if (['user', 'customer', 'client', 'incoming', 'inbound'].includes(v)) return 'user';
-      if (['assistant', 'bot', 'ai', 'system'].includes(v)) return 'assistant';
-      if (['human_agent', 'agent', 'human', 'staff', 'admin', 'outbound'].includes(v)) return 'human_agent';
-      return v || 'user';
-    }
-
-    function normalizeBranch(value) {
-      const v = String(value || '').toLowerCase();
-      if (v.includes('travel') || v.includes('singlife')) return 'travel';
-      return 'shield';
-    }
-
-    function normalizeConversation(row) {
-      const id = row?.id != null ? String(row.id) : String(row?.contact_key || row?.phone || '');
-      const isHuman = row?.bot_enabled === false || !!row?.assigned_to;
-      return {
-        ...row,
-        session_id: id,
-        phone_number: row?.phone || row?.whatsapp_phone || '',
-        customer_name: row?.name || row?.patient_name || row?.phone || '',
-        whatsapp_name: row?.name || '',
-        branch: normalizeBranch(row?.platform),
-        route: isHuman ? 'human' : 'normal',
-        status: row?.escalate ? 'escalated' : (row?.status || 'open'),
-        agent_name: row?.agent_name || row?.assigned_to || ''
-      };
-    }
-
-    function normalizeMessage(row) {
-      const role = normalizeRole(row?.sender_type || row?.sender);
-      return {
-        ...row,
-        session_id: String(row?.conversation_id ?? row?.contact_key ?? row?.phone ?? ''),
-        content: row?.message || '',
-        role,
-        msg_status: row?.status || 'sent',
-        media_filename: row?.media_filename || ''
-      };
-    }
-
-    function normalizeTemplateSend(row) {
-      return {
-        ...row,
-        send_status: row?.status || 'sent',
-        phone_number: row?.phone || '',
-        meta_message_id: row?.wamid || '',
-        created_at: row?.sent_at || row?.delivered_at || row?.read_at || row?.replied_at || row?.failed_at || null
-      };
-    }
-
-    function mapSupabasePath(path) {
-      let mapped = path;
-      let kind = '';
-      if (mapped.startsWith('conversations')) {
-        mapped = TABLE_CONVERSATIONS + mapped.slice('conversations'.length);
-        kind = 'conversations';
-      } else if (mapped.startsWith('messages')) {
-        mapped = TABLE_MESSAGES + mapped.slice('messages'.length);
-        mapped = mapped.replace('session_id=eq.', 'conversation_id=eq.');
-        mapped = mapped.replace('content=ilike.', 'message=ilike.');
-        if (mapped.includes('input_tokens') || mapped.includes('output_tokens')) {
-          mapped = TABLE_MESSAGES + '?select=id&limit=1';
-        } else {
-          mapped = mapped.replace(/select=[^&]*/g, 'select=*');
-        }
-        kind = 'messages';
-      } else if (mapped.startsWith('crm_template_logs')) {
-        mapped = TABLE_TEMPLATE_SENDS + '?select=*&order=sent_at.desc';
-        kind = 'template_sends';
-      }
-      return { path: mapped, kind };
-    }
-
-    function normalizeSupabaseData(kind, data) {
-      const mapOne = (row) => {
-        if (kind === 'conversations') return normalizeConversation(row);
-        if (kind === 'messages') return normalizeMessage(row);
-        if (kind === 'template_sends') return normalizeTemplateSend(row);
-        return row;
-      };
-      return Array.isArray(data) ? data.map(mapOne) : mapOne(data);
-    }
-
-    function mapPostPathAndBody(path, body) {
-      if (path === 'messages') {
-        return {
-          path: TABLE_MESSAGES,
-          kind: 'messages',
-          body: {
-            conversation_id: body.conversation_id || body.session_id || selectedConv?.id || null,
-            sender: body.sender || (body.role === 'human_agent' ? (agentName || 'Human Agent') : (body.role || body.sender_type || 'user')),
-            message: body.message || body.content || '',
-            phone: body.phone || selectedConv?.phone_number || selectedConv?.phone || null,
-            sender_type: body.sender_type || body.role || 'user',
-            media_url: body.media_url || null,
-            media_type: body.media_type || null,
-            agent_name: body.agent_name || null,
-            contact_key: body.contact_key || selectedConv?.contact_key || null,
-            platform: body.platform || selectedConv?.platform || selectedConv?.branch || null,
-            wamid: body.wamid || null,
-            status: body.msg_status || body.status || 'sent'
-          }
-        };
-      }
-      const mapped = mapSupabasePath(path);
-      return { path: mapped.path, kind: mapped.kind, body };
-    }
-
     let PHONE_NUMBER_IDS = { travel: '', shield: '' }; // Configure the new Meta phone_number_id values in Settings.
 
     let SUPABASE_URL = '';
@@ -2972,32 +2855,29 @@
     }
 
     async function sbGet(path) {
-      const mapped = mapSupabasePath(path);
-      const res = await fetch(SUPABASE_URL + '/rest/v1/' + mapped.path, { headers: sbHeaders() });
+      const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, { headers: sbHeaders() });
       if (!res.ok) throw new Error('Supabase GET failed: ' + res.status + ' ' + await res.text());
-      return normalizeSupabaseData(mapped.kind, await res.json());
+      return res.json();
     }
 
     async function sbPatch(path, body) {
-      const mapped = mapSupabasePath(path);
-      const res = await fetch(SUPABASE_URL + '/rest/v1/' + mapped.path, {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
         method: 'PATCH',
         headers: sbHeaders(),
         body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error('Supabase PATCH failed: ' + res.status + ' ' + await res.text());
-      return normalizeSupabaseData(mapped.kind, await res.json());
+      return res.json();
     }
 
     async function sbPost(path, body) {
-      const mapped = mapPostPathAndBody(path, body);
-      const res = await fetch(SUPABASE_URL + '/rest/v1/' + mapped.path, {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
         method: 'POST',
         headers: sbHeaders(),
-        body: JSON.stringify(mapped.body)
+        body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error('Supabase POST failed: ' + res.status + ' ' + await res.text());
-      return normalizeSupabaseData(mapped.kind, await res.json());
+      return res.json();
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -3300,8 +3180,15 @@
     //  MISSED MESSAGES (inbound_log safety net)
     // ─────────────────────────────────────────────────────────────
     async function fetchMissedMessages() {
-      // No nonmedical_inbound_log table was provided, so this stays empty for now.
-      missedMessages = [];
+      try {
+        const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        const data = await sbGet(
+          'inbound_log?n8n_status=neq.forwarded&created_at=gte.' + encodeURIComponent(since) + '&order=created_at.desc&limit=200'
+        );
+        missedMessages = data || [];
+      } catch (e) {
+        missedMessages = [];
+      }
       updateMissedUI();
     }
 
@@ -4124,7 +4011,7 @@
 
           const header = [
             '═══════════════════════════════════════════════════',
-            '  ULINK NON-MEDICAL TOURISM TRANSCRIPT',
+            '  SINGLIFE CONVERSATION TRANSCRIPT',
             '═══════════════════════════════════════════════════',
             `  Customer  : ${name}`,
             `  Phone     : ${c.phone_number || 'N/A'}`,
@@ -4155,7 +4042,7 @@
           ].join('\n');
 
           const text = header + body + footer;
-          const filename = `nonmedical_chat_${c.session_id}_${dateStr}.txt`;
+          const filename = `singlife_chat_${c.session_id}_${dateStr}.txt`;
           const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -4391,8 +4278,11 @@
         const exportData = [];
         const processedSessions = new Set();
 
-        // Export all Ulink Non-Medical Tourism conversations.
-        const singlifeConversations = conversations;
+        // Only export the Singlife WhatsApp line.
+        // In this dashboard, the Singlife line uses branch = "travel".
+        const singlifeConversations = conversations.filter(c => {
+          return (c.branch || '').toLowerCase() === 'travel';
+        });
 
         let processed = 0;
 
@@ -4468,7 +4358,7 @@
 
         if (!exportData.length) {
           showToast(
-            'No non-medical tourism messages found for ' + selectedDate + '.',
+            'No Singlife messages found for ' + selectedDate + '.',
             5000
           );
 
@@ -4490,7 +4380,7 @@
             body: JSON.stringify({
               export_date: selectedDate,
               timezone: 'Asia/Singapore',
-              audit_folder_name: 'Ulink Non-Medical Tourism WA Audit',
+              audit_folder_name: 'Singlife WA Audit',
               data: exportData
             })
           }
@@ -4571,7 +4461,7 @@
 
       const header = [
         '═══════════════════════════════════════════════════',
-        '  ULINK NON-MEDICAL TOURISM TRANSCRIPT',
+        '  SINGLIFE CONVERSATION TRANSCRIPT',
         '═══════════════════════════════════════════════════',
         `  Customer  : ${name}`,
         `  Phone     : ${c.phone_number || 'N/A'}`,
@@ -4603,7 +4493,7 @@
 
       const text = header + body + footer;
       const dateStr = new Date().toISOString().slice(0, 10);
-      const filename = `nonmedical_chat_${c.session_id}_${dateStr}.txt`;
+      const filename = `singlife_chat_${c.session_id}_${dateStr}.txt`;
 
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -5321,8 +5211,9 @@
         // with the outbound message already there.
         await fetchConversations();
         if (n8nSessionId) {
-          const target = conversations.find(c => c.session_id === String(n8nSessionId))
-            || conversations.find(c => c.phone_number === phone);
+          const base = n8nSessionId.replace(/_(travel|shield)$/, '');
+          const target = conversations.find(c => c.session_id === n8nSessionId)
+            || conversations.find(c => c.session_id === base);
           if (target) await selectConv(target.session_id);
         }
       } catch (e) {
@@ -5373,7 +5264,7 @@
     async function supabaseUploadMedia(file, sessionId) {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       const path = sessionId + '/' + Date.now() + '_' + safeName;
-      const res = await fetch(SUPABASE_URL + '/storage/v1/object/' + STORAGE_BUCKET + '/' + path, {
+      const res = await fetch(SUPABASE_URL + '/storage/v1/object/agent-media/' + path, {
         method: 'POST',
         headers: {
           'Authorization': 'Bearer ' + SUPABASE_KEY,
@@ -5383,7 +5274,7 @@
         body: file
       });
       if (!res.ok) throw new Error('Supabase storage upload failed ' + res.status);
-      return SUPABASE_URL + '/storage/v1/object/public/' + STORAGE_BUCKET + '/' + path;
+      return SUPABASE_URL + '/storage/v1/object/public/agent-media/' + path;
     }
 
     function _fmtBytes(b) {
