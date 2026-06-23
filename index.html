@@ -2744,68 +2744,81 @@
 
     function normalizeBranch(value) {
       const v = String(value || '').toLowerCase();
+
+      if (v.includes('nonmedical') || v.includes('non-medical')) return 'shield';
+      if (v.includes('ulink') || v.includes('shield')) return 'shield';
       if (v.includes('travel') || v.includes('singlife')) return 'travel';
+
       return 'shield';
     }
 
     function normalizeConversation(row) {
-      const id = row?.id != null ? String(row.id) : String(row?.contact_key || row?.phone || '');
-      const isHuman = row?.bot_enabled === false || !!row?.assigned_to;
       return {
         ...row,
-        session_id: id,
-        phone_number: row?.phone || row?.whatsapp_phone || '',
-        customer_name: row?.name || row?.patient_name || row?.phone || '',
-        whatsapp_name: row?.name || '',
-        branch: normalizeBranch(row?.platform),
-        route: isHuman ? 'human' : 'normal',
-        status: row?.escalate ? 'escalated' : (row?.status || 'open'),
-        agent_name: row?.agent_name || row?.assigned_to || ''
+        id: row?.id,
+        session_id: String(row?.session_id || ''),
+        phone_number: row?.phone_number || '',
+        customer_name: row?.customer_name || row?.whatsapp_name || row?.phone_number || '',
+        whatsapp_name: row?.whatsapp_name || row?.customer_name || '',
+        branch: normalizeBranch(row?.branch || 'nonmedical'),
+        route: row?.route || (row?.bot_enabled === false ? 'human' : 'normal'),
+        status: row?.status || 'active',
+        last_message: row?.last_message || '',
+        message_count: row?.message_count || 0,
+        bot_enabled: row?.bot_enabled,
+        agent_name: row?.agent_name || ''
       };
     }
 
     function normalizeMessage(row) {
-      const role = normalizeRole(row?.sender_type || row?.sender);
       return {
         ...row,
-        session_id: String(row?.conversation_id ?? row?.contact_key ?? row?.phone ?? ''),
-        content: row?.message || '',
-        role,
-        msg_status: row?.status || 'sent',
-        media_filename: row?.media_filename || ''
+        id: row?.id,
+        conversation_id: row?.conversation_id || null,
+        session_id: String(row?.session_id || ''),
+        content: row?.content || '',
+        role: normalizeRole(row?.role || 'user'),
+        msg_status: row?.msg_status || 'sent',
+        media_url: row?.media_url || '',
+        media_type: row?.media_type || '',
+        media_filename: row?.media_filename || '',
+        created_at: row?.created_at
       };
     }
 
     function normalizeTemplateSend(row) {
       return {
         ...row,
-        send_status: row?.status || 'sent',
-        phone_number: row?.phone || '',
-        meta_message_id: row?.wamid || '',
-        created_at: row?.sent_at || row?.delivered_at || row?.read_at || row?.replied_at || row?.failed_at || null
+        send_status: row?.send_status || row?.status || 'sent',
+        phone_number: row?.phone_number || row?.phone || '',
+        meta_message_id: row?.meta_message_id || row?.wamid || '',
+        created_at: row?.created_at || row?.sent_at || row?.delivered_at || row?.read_at || row?.replied_at || row?.failed_at || null
       };
     }
 
     function mapSupabasePath(path) {
       let mapped = path;
       let kind = '';
+
       if (mapped.startsWith('conversations')) {
         mapped = TABLE_CONVERSATIONS + mapped.slice('conversations'.length);
         kind = 'conversations';
       } else if (mapped.startsWith('messages')) {
         mapped = TABLE_MESSAGES + mapped.slice('messages'.length);
-        mapped = mapped.replace('session_id=eq.', 'conversation_id=eq.');
-        mapped = mapped.replace('content=ilike.', 'message=ilike.');
+        kind = 'messages';
+
         if (mapped.includes('input_tokens') || mapped.includes('output_tokens')) {
           mapped = TABLE_MESSAGES + '?select=id&limit=1';
-        } else {
-          mapped = mapped.replace(/select=[^&]*/g, 'select=*');
         }
-        kind = 'messages';
       } else if (mapped.startsWith('crm_template_logs')) {
-        mapped = TABLE_TEMPLATE_SENDS + '?select=*&order=sent_at.desc';
+        mapped = TABLE_TEMPLATE_SENDS + mapped.slice('crm_template_logs'.length);
         kind = 'template_sends';
+      } else if (mapped.startsWith('inbound_log')) {
+        mapped = 'nonmedical_inbound_log' + mapped.slice('inbound_log'.length);
+      } else if (mapped.startsWith('outbound_log')) {
+        mapped = 'nonmedical_outbound_log' + mapped.slice('outbound_log'.length);
       }
+
       return { path: mapped, kind };
     }
 
@@ -2816,30 +2829,35 @@
         if (kind === 'template_sends') return normalizeTemplateSend(row);
         return row;
       };
+
       return Array.isArray(data) ? data.map(mapOne) : mapOne(data);
     }
 
     function mapPostPathAndBody(path, body) {
       if (path === 'messages') {
+        const mapMessageBody = (b) => ({
+          conversation_id: b.conversation_id || selectedConv?.id || null,
+          session_id: b.session_id || selectedConv?.session_id || '',
+          role: normalizeRole(b.role || b.sender_type || b.sender || 'human_agent'),
+          content: b.content || b.message || '',
+          customer_name: b.customer_name || selectedConv?.customer_name || selectedConv?.whatsapp_name || '',
+          route: b.route || selectedConv?.route || 'human',
+          raw_json: b.raw_json || {},
+          wamid: b.wamid || null,
+          msg_status: b.msg_status || b.status || 'sent',
+          media_url: b.media_url || null,
+          media_type: b.media_type || null,
+          media_filename: b.media_filename || null,
+          agent_name: b.agent_name || agentName || null
+        });
+
         return {
           path: TABLE_MESSAGES,
           kind: 'messages',
-          body: {
-            conversation_id: body.conversation_id || body.session_id || selectedConv?.id || null,
-            sender: body.sender || (body.role === 'human_agent' ? (agentName || 'Human Agent') : (body.role || body.sender_type || 'user')),
-            message: body.message || body.content || '',
-            phone: body.phone || selectedConv?.phone_number || selectedConv?.phone || null,
-            sender_type: body.sender_type || body.role || 'user',
-            media_url: body.media_url || null,
-            media_type: body.media_type || null,
-            agent_name: body.agent_name || null,
-            contact_key: body.contact_key || selectedConv?.contact_key || null,
-            platform: body.platform || selectedConv?.platform || selectedConv?.branch || null,
-            wamid: body.wamid || null,
-            status: body.msg_status || body.status || 'sent'
-          }
+          body: Array.isArray(body) ? body.map(mapMessageBody) : mapMessageBody(body)
         };
       }
+
       const mapped = mapSupabasePath(path);
       return { path: mapped.path, kind: mapped.kind, body };
     }
@@ -3062,7 +3080,7 @@
 
     // ── Unread tracking ──────────────────────────────────────────
     function baseSessionId(sessionId) {
-      return sessionId.replace(/_(travel|shield)$/, '');
+      return sessionId.replace(/_(travel|shield|nonmedical)$/, '');
     }
 
     function getLastSeen(sessionId) {
@@ -3194,7 +3212,7 @@
       // reflect the true last activity — even if it happened in a routed sub-session.
       const effectiveMap = {};
       (convData || []).forEach(c => {
-        const base = c.session_id.replace(/_(travel|shield)$/, '');
+        const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
         let best = newMap[c.session_id] || null;
         Object.keys(newMap).forEach(sid => {
           if (sid === base || sid.startsWith(base + '_')) {
@@ -3465,7 +3483,7 @@
       // a Travel and Shield session appears as ONE contact card, not two duplicates.
       const phoneGroups = new Map();
       filtered.forEach(c => {
-        const base = c.session_id.replace(/_(travel|shield)$/, '');
+        const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
         if (!phoneGroups.has(base)) phoneGroups.set(base, []);
         phoneGroups.get(base).push(c);
       });
@@ -3589,7 +3607,7 @@
         const wname = (c.whatsapp_name || '').toLowerCase();
         const cname = (c.customer_name || '').toLowerCase();
         if (!(phone.includes(q) || wname.includes(q) || cname.includes(q))) return false;
-        const base = c.session_id.replace(/_(travel|shield)$/, '');
+        const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
         if (seenBase.has(base)) return false;
         seenBase.add(base);
         return true;
@@ -3628,13 +3646,13 @@
       // Map base session_id → conversation
       const baseToConv = {};
       conversations.forEach(c => {
-        const base = c.session_id.replace(/_(travel|shield)$/, '');
+        const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
         if (!baseToConv[base]) baseToConv[base] = c;
       });
 
       const matches = [];
       (msgData || []).forEach(m => {
-        const base = (m.session_id || '').replace(/_(travel|shield)$/, '');
+        const base = (m.session_id || '').replace(/_(travel|shield|nonmedical)$/, '');
         const conv = baseToConv[base];
         if (!conv) return;
         matches.push({ msg: m, conv });
@@ -3745,8 +3763,21 @@
         // and clicking the routed session shows the preceding gate messages.
         // All messages are stored under the base phone number only (no _travel/_shield suffix).
         // Strip any suffix to get the bare phone, then do a simple exact match.
-        const base = selectedSessionId.replace(/_(travel|shield)$/, '');
-        const msgQuery = 'messages?session_id=eq.' + encodeURIComponent(base) + '&select=*&order=created_at.asc';
+        const base = selectedSessionId.replace(/_(travel|shield|nonmedical)$/, '');
+
+        const sessionsToFetch = [
+          selectedSessionId,
+          base,
+          base + '_nonmedical',
+          base + '_travel',
+          base + '_shield'
+        ];
+
+        const orFilter = sessionsToFetch
+          .map(s => 'session_id.eq.' + encodeURIComponent(s))
+          .join(',');
+
+        const msgQuery = 'messages?or=(' + orFilter + ')&select=*&order=created_at.asc';
         console.log('[loadMessages] session:', selectedSessionId, '| base:', base);
         const allRelated = await sbGetAll(msgQuery);
         console.log('[loadMessages] fetched', allRelated?.length ?? 0, 'messages');
@@ -4054,7 +4085,7 @@
       btn.textContent = 'Closing…';
 
       try {
-        const basePhone = selectedConv.session_id.replace(/_(travel|shield)$/, '');
+        const basePhone = selectedConv.session_id.replace(/_(travel|shield|nonmedical)$/, '');
         const res = await fetch(n8nWebhookUrl('human-close-chat'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4101,7 +4132,7 @@
         // export the same conversation twice when both versions appear in the list.
         const seenBases = new Set();
         const uniqueConvs = conversations.filter(c => {
-          const base = c.session_id.replace(/_(travel|shield)$/, '');
+          const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
           if (seenBases.has(base)) return false;
           seenBases.add(base);
           return true;
@@ -4113,7 +4144,7 @@
         for (const c of uniqueConvs) {
           // Messages are stored under the base phone number (no _travel/_shield suffix).
           // Match the same logic used in loadMessages().
-          const base = c.session_id.replace(/_(travel|shield)$/, '');
+          const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
           const msgs = await sbGetAll(
             'messages?session_id=eq.' + encodeURIComponent(base) +
             '&select=*&order=created_at.asc'
@@ -4233,7 +4264,7 @@
       try {
         const seenBases = new Set();
         const uniqueConvs = conversations.filter(c => {
-          const base = c.session_id.replace(/_(travel|shield)$/, '');
+          const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
           if (seenBases.has(base)) return false;
           seenBases.add(base);
           return true;
@@ -4244,7 +4275,7 @@
         let done = 0;
 
         for (const c of uniqueConvs) {
-          const base = c.session_id.replace(/_(travel|shield)$/, '');
+          const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
           const msgs = await sbGetAll(
             'messages?session_id=eq.' + encodeURIComponent(base) +
             '&select=*&order=created_at.asc'
@@ -4400,7 +4431,7 @@
 
           // Messages are stored using the base session ID
           const baseSessionId =
-            c.session_id.replace(/_(travel|shield)$/, '');
+            c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
 
           // Avoid exporting the same chat twice
           if (processedSessions.has(baseSessionId)) {
@@ -5131,7 +5162,7 @@
         const content = '[Template: ' + _selectedTmpl.name + '] ' +
           (expandedBody || paramValues.join(', '));
 
-        const baseSessionId = selectedConv.session_id.replace(/_(travel|shield)$/, '');
+        const baseSessionId = selectedConv.session_id.replace(/_(travel|shield|nonmedical)$/, '');
         if (!N8N_BASE_URL) throw new Error('n8n Webhook Base URL not configured in Settings.');
 
         // Route through n8n which uses the verified WhatsApp credential for actual delivery
@@ -5472,7 +5503,7 @@
       sendBtn.disabled = true;
       input.disabled = true;
 
-      const baseSessionId = selectedConv.session_id.replace(/_(travel|shield)$/, '');
+      const baseSessionId = selectedConv.session_id.replace(/_(travel|shield|nonmedical)$/, '');
       const phoneNumberId = getPhoneNumberId(selectedConv.branch);
       const capturedMedia = _pendingMedia;
 
