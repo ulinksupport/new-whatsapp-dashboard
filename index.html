@@ -2410,6 +2410,7 @@
         <!-- Brand row -->
         <div id="brand-filters">
           <button id="brand-all" class="filter-btn brand-btn active" onclick="setBrand('all')">All</button>
+          <button id="missed-filter-btn" class="filter-btn" onclick="setFilter('missed')" style="border-color:#dc2626;color:#dc2626;">&#9873; Missing in n8n (0)</button>
         </div>
         <!-- Status row (shown when a brand is selected) -->
         <div id="status-filters">
@@ -2424,9 +2425,8 @@
           <button id="filter-inactive" class="filter-btn" data-filter="inactive" onclick="setFilter('inactive')">&#9201;
             Inactive</button>
         </div>
-        <!-- Missed messages row (always visible) -->
-        <div id="missed-filter-row">
-          <button id="missed-filter-btn" onclick="setFilter('missed')">&#9873; Missing in n8n (0)</button>
+        <!-- Missed messages row (hidden — button moved to brand-filters row) -->
+        <div id="missed-filter-row" style="display:none;">
         </div>
       </div>
       <div id="conv-list">
