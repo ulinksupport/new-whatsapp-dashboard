@@ -4019,7 +4019,7 @@
           ? messages.slice(-20).map(m => ({ role: m.role, content: m.content || '', created_at: m.created_at }))
           : undefined;
 
-        const res = await fetch(n8nWebhookUrl('takeover'), {
+        const res = await fetch(n8nWebhookUrl('391de14b-07d9-4df5-a771-01dc5bb7ec6e'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: selectedConv.session_id, action, recent_messages: recentMessages, agent_name: action === 'human' ? (agentName || '') : '' })
@@ -4049,27 +4049,19 @@
     async function closeChat() {
       if (!selectedConv) return;
       const name = selectedConv.customer_name || selectedConv.whatsapp_name || selectedConv.phone_number || 'Unknown';
-      if (!confirm('Close this conversation?\n\nThis will:\n• Set the chat status to Closed\n• Send a notification email to ops@ulinkassist.com with the full transcript\n\nCustomer: ' + name)) return;
+      if (!confirm('Close this conversation?\n\nThis will set the chat status to Closed.\n\nCustomer: ' + name)) return;
 
       const btn = document.getElementById('close-chat-btn');
       btn.disabled = true;
       btn.textContent = 'Closing…';
 
       try {
-        const basePhone = selectedConv.session_id.replace(/_(travel|shield|nonmedical)$/, '');
-        const res = await fetch(n8nWebhookUrl('human-close-chat'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            phone_number: basePhone,
-            session_id: selectedConv.session_id,
-            customer_name: name,
-            branch: selectedConv.branch || 'N/A'
-          })
+        await sbPatch('conversations?session_id=eq.' + encodeURIComponent(selectedConv.session_id), {
+          route: 'closed',
+          status: 'closed',
+          updated_at: new Date().toISOString()
         });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
 
-        // Update local state so header and list reflect closed status immediately
         selectedConv.route = 'closed';
         selectedConv.status = 'closed';
         const idx = conversations.findIndex(c => c.session_id === selectedConv.session_id);
@@ -4077,7 +4069,7 @@
 
         updateChatHeader();
         renderConvList();
-        showToast('✓ Chat closed — ops notified');
+        showToast('✓ Chat closed');
       } catch (e) {
         alert('Close chat failed: ' + e.message);
       }
@@ -4296,7 +4288,7 @@
           data: exportData
         };
 
-        const res = await fetch(n8nWebhookUrl('monthly-webChat-export'), {
+        const res = await fetch(n8nWebhookUrl('3132ffeb-77ac-4d81-a35a-6b3e13e5ec84'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -4483,7 +4475,7 @@
         btn.textContent = 'Sending…';
 
         const response = await fetch(
-          n8nWebhookUrl('custom-export-chat'),
+          n8nWebhookUrl('befae09e-1529-4208-af80-bfa2b38ff290'),
           {
             method: 'POST',
             headers: {
@@ -5300,7 +5292,7 @@
         let n8nSessionId = null;
         if (N8N_BASE_URL) {
           sendBtn.textContent = 'Opening chat…';
-          const n8nRes = await fetch(n8nWebhookUrl('outbound-new-chat'), {
+          const n8nRes = await fetch(n8nWebhookUrl('21f75d4b-f7c0-4362-b4f0-c40f1729bd9c'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
