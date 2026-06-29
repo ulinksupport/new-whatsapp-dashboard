@@ -3820,7 +3820,7 @@
       document.getElementById('chat-header-avatar').textContent = initials;
       document.getElementById('chat-header-name').textContent = name;
       document.getElementById('chat-header-sub').textContent =
-        (c.phone_number || '') + '  ·  ' + (c.branch || '').toUpperCase();
+        (c.phone_number || '') + '  ·  NON-MEDICAL TOURISM';
 
       const isInactive = is24hrInactive(c.session_id);
       const isClosed = c.status === 'closed' || c.route === 'closed';
@@ -5141,7 +5141,8 @@
             is_template: true,
             template_name: _selectedTmpl.name,
             template_language: tmplLang,
-            template_components: components
+            template_components: components,
+            agent_name: agentName || ''
           })
         });
         let n8nData;
@@ -5305,6 +5306,29 @@
           let n8nData = {};
           try { n8nData = n8nRes.ok ? await n8nRes.json() : {}; } catch (_) { }
           if (n8nData.success && n8nData.session_id) n8nSessionId = n8nData.session_id;
+        }
+
+        // Save template message to Supabase directly (n8n may or may not do this)
+        const sessionId = n8nSessionId || (phone + '_nonmedical');
+        let expandedBody = '';
+        const bodyComp2 = (_newChatSelectedTmpl.components || []).find(c => c.type === 'BODY');
+        if (bodyComp2 && bodyComp2.text) {
+          expandedBody = bodyComp2.text;
+          bodyParams.forEach((p, i) => {
+            expandedBody = expandedBody.replace(new RegExp('\\{\\{' + (i + 1) + '\\}\\}', 'g'), p.text);
+          });
+        }
+        const tmplContent = '[Template: ' + _newChatSelectedTmpl.name + '] ' + (expandedBody || bodyParams.map(p => p.text).join(', '));
+        try {
+          await sbPost('messages', {
+            session_id: sessionId,
+            role: 'human_agent',
+            agent_name: agentName || '',
+            content: tmplContent,
+            msg_status: 'sent'
+          });
+        } catch (dbErr) {
+          console.error('Failed to save new chat template to Supabase:', dbErr);
         }
 
         closeNewChatModal();
