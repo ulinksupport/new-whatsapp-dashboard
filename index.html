@@ -2317,12 +2317,10 @@
           scope)</span></label>
       <input id="cfg-meta-token" type="text" placeholder="EAAxxxxx…" />
 
-      <label>Singlife Travel Phone Number ID <span style="font-weight:400;color:#999;">(new dashboard
-          number)</span></label>
-      <input id="cfg-phone-travel" type="text" placeholder="New Travel phone_number_id" />
+      <label>Phone Number ID <span style="font-weight:400;color:#999;">(SG WhatsApp number)</span></label>
+      <input id="cfg-phone-travel" type="text" placeholder="e.g. 1194263793769742" />
 
-      <label>Ulink Phone Number ID <span style="font-weight:400;color:#999;">(new dashboard number)</span></label>
-      <input id="cfg-phone-shield" type="text" placeholder="New Ulink phone_number_id" />
+      <input id="cfg-phone-shield" type="hidden" />
 
       <label>Your Name <span style="font-weight:400;color:#999;">(shown to other agents when you handle a
           chat)</span></label>
@@ -2412,8 +2410,6 @@
         <!-- Brand row -->
         <div id="brand-filters">
           <button id="brand-all" class="filter-btn brand-btn active" onclick="setBrand('all')">All</button>
-          <button id="brand-ulink" class="filter-btn brand-btn" onclick="setBrand('ulink')">Ulink</button>
-          <button id="brand-singlife" class="filter-btn brand-btn" onclick="setBrand('singlife')">Singlife</button>
         </div>
         <!-- Status row (shown when a brand is selected) -->
         <div id="status-filters">
@@ -2423,7 +2419,6 @@
           <button id="filter-active" class="filter-btn" data-filter="active"
             onclick="setFilter('active')">Active</button>
           <button id="filter-human" class="filter-btn" data-filter="human" onclick="setFilter('human')">Human</button>
-          <button id="filter-ai" class="filter-btn" data-filter="ai" onclick="setFilter('ai')">AI</button>
           <button id="filter-escalated" class="filter-btn" data-filter="escalated"
             onclick="setFilter('escalated')">Escalated</button>
           <button id="filter-inactive" class="filter-btn" data-filter="inactive" onclick="setFilter('inactive')">&#9201;
@@ -2462,9 +2457,9 @@
               Export</button>
             <button id="template-btn" class="header-btn" onclick="showTemplateModal()"
               title="Send template message">&#128203; Template</button>
-            <div id="mode-toggle" title="Toggle between AI and Human agent mode">
-              <button id="btn-ai-mode" class="mode-btn active" onclick="setModeAI()">🤖 AI Active</button>
-              <button id="btn-human-mode" class="mode-btn" onclick="setModeHuman()">👤 Human Active</button>
+            <div id="mode-toggle" title="Conversation handled by human agent" style="display:none;">
+              <button id="btn-ai-mode" class="mode-btn" style="display:none;"></button>
+              <button id="btn-human-mode" class="mode-btn active" style="pointer-events:none;opacity:.7;">👤 Human Agent</button>
             </div>
             <button id="close-chat-btn" onclick="closeChat()" title="Close this conversation and notify ops">&#10005;
               Close Chat</button>
@@ -2473,7 +2468,7 @@
 
         <div id="messages-area"></div>
 
-        <div id="human-mode-notice">&#128993; Human mode active — bot is paused. You are replying directly.</div>
+        <div id="human-mode-notice" style="display:none;">&#128993; Human mode active — bot is paused. You are replying directly.</div>
 
         <!-- 24hr inactivity banner with big template CTA -->
         <div id="inactive-banner">
@@ -2555,12 +2550,10 @@
         </div>
       </div>
 
-      <!-- Token usage -->
-      <div class="token-section" id="token-section">
+      <!-- Token usage (hidden — no AI in this dashboard) -->
+      <div class="token-section" id="token-section" style="display:none;">
         <h3>&#128267; AI Token Usage (Cost Tracking)</h3>
-        <div class="token-grid" id="token-grid">
-          <div style="color:#6b7280;font-size:13px;">Checking token data…</div>
-        </div>
+        <div class="token-grid" id="token-grid"></div>
       </div>
 
       <!-- CRM Template Analytics -->
@@ -2681,11 +2674,10 @@
         <label>Phone Number <small style="color:#6b7280">(include country code, e.g. 6591234567)</small></label>
         <input id="new-chat-phone" type="tel" placeholder="6591234567" />
       </div>
-      <div class="new-chat-field">
+      <div class="new-chat-field" style="display:none;">
         <label>Brand / Line</label>
         <select id="new-chat-branch">
-          <option value="travel">Singlife Travel (configured new number)</option>
-          <option value="shield">Ulink (configured new number)</option>
+          <option value="nonmedical" selected>Non-Medical Tourism</option>
         </select>
       </div>
       <div class="new-chat-field">
@@ -2949,8 +2941,8 @@
     }
 
     function getPhoneNumberId(branch) {
-      const id = PHONE_NUMBER_IDS[branch] || PHONE_NUMBER_IDS.travel || PHONE_NUMBER_IDS.shield || '';
-      if (!id) throw new Error('Meta Phone Number ID for the new dashboard is not configured in Settings.');
+      const id = PHONE_NUMBER_IDS.travel || PHONE_NUMBER_IDS.shield || '';
+      if (!id) throw new Error('Phone Number ID is not configured in Settings.');
       return id;
     }
 
@@ -3295,15 +3287,12 @@
 
       // Brand counts
       setFilterButtonText('brand-all', 'All', conversations.length);
-      setFilterButtonText('brand-ulink', 'Ulink', conversations.filter(c => c.branch === 'shield').length);
-      setFilterButtonText('brand-singlife', 'Singlife', conversations.filter(c => c.branch === 'travel').length);
 
       // Status counts (within selected brand)
       setFilterButtonText('filter-all', 'All', total);
       setFilterButtonText('filter-unread', 'Unread', unread);
       setFilterButtonText('filter-active', 'Active', active);
       setFilterButtonText('filter-human', 'Human', human);
-      setFilterButtonText('filter-ai', 'AI', ai);
       setFilterButtonText('filter-escalated', 'Escalated', escalated);
       setFilterButtonText('filter-inactive', 'Inactive', inactive);
     }
@@ -3530,7 +3519,7 @@
           ? (latestMsg.content || '').replace(/\n/g, ' ').slice(0, 60)
           : (primary.last_message || '').replace(/\n/g, ' ').slice(0, 60) || 'No messages yet';
         const rolePrefix = latestMsg
-          ? (latestMsg.role === 'user' ? '' : latestMsg.role === 'human_agent' ? '👤 You: ' : '🤖 Bot: ')
+          ? (latestMsg.role === 'user' ? '' : '👤 You: ')
           : '';
 
         const timeStr = latestMsg?.created_at ? relTime(latestMsg.created_at) : '';
@@ -3553,13 +3542,7 @@
             ? '<span class="badge badge-escalated">Escalated</span>'
             : '<span class="badge badge-active">Active</span>';
 
-        // Show a badge for every branch present in the group (e.g. Travel + Shield)
-        const branches = [...new Set(members.map(c => c.branch).filter(Boolean))];
-        const branchBadges = branches.map(b =>
-          b === 'travel' ? '<span class="badge badge-travel">Travel</span>'
-            : b === 'shield' ? '<span class="badge badge-shield">Shield</span>'
-              : ''
-        ).join('');
+        const branchBadges = '';
 
         // If the customer has multiple sessions (e.g. Travel + Shield), show clickable
         // tabs inside the card so agents can switch between them without searching.
@@ -3839,28 +3822,16 @@
       document.getElementById('chat-header-sub').textContent =
         (c.phone_number || '') + '  ·  ' + (c.branch || '').toUpperCase();
 
-      const isHuman = c.route === 'human';
       const isInactive = is24hrInactive(c.session_id);
+      const isClosed = c.status === 'closed' || c.route === 'closed';
 
-      // Mode toggle: highlight active side
-      const btnAI = document.getElementById('btn-ai-mode');
-      const btnHuman = document.getElementById('btn-human-mode');
-      if (isHuman) {
-        btnAI.classList.remove('active');
-        btnHuman.classList.add('active');
-      } else {
-        btnAI.classList.add('active');
-        btnHuman.classList.remove('active');
-      }
-
-      // Reply bar: locked if not in human mode, OR if 24hr window expired
-      const replyLocked = !isHuman || isInactive;
+      // Reply bar: locked only if 24hr window expired or chat is closed
+      const replyLocked = isInactive || isClosed;
       document.getElementById('reply-bar').classList.toggle('locked', replyLocked);
-      document.getElementById('human-mode-notice').style.display = (isHuman && !isInactive) ? 'block' : 'none';
       document.getElementById('inactive-banner').style.display = isInactive ? 'block' : 'none';
 
-      // Close Chat button: only visible when human has taken over
-      document.getElementById('close-chat-btn').style.display = isHuman ? 'inline-flex' : 'none';
+      // Close Chat button: always visible for active conversations
+      document.getElementById('close-chat-btn').style.display = isClosed ? 'none' : 'inline-flex';
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -5811,16 +5782,13 @@
 
       document.getElementById('stats-grid').innerHTML = [
         { value: total, label: 'Total Chats', color: '#075e54' },
-        { value: ulink, label: 'Ulink (Shield)', color: '#be185d' },
-        { value: singlife, label: 'Singlife (Travel)', color: '#1d4ed8' },
         { value: activeConvs, label: 'Active (<24h)', color: '#15803d' },
         { value: inactiveConvs, label: 'Inactive (>24h)', color: '#6b21a8' },
-        { value: humanConvs, label: 'Human Mode', color: '#b45309' },
+        { value: humanConvs, label: 'Agent Handling', color: '#b45309' },
         { value: escalated, label: 'Escalated', color: '#dc2626' },
         { value: unreadConvs, label: 'Unread', color: '#0891b2' },
         { value: totalMsgs, label: 'Total Messages', color: '#374151' },
         { value: customerMsgs, label: 'Customer Msgs', color: '#374151' },
-        { value: botMsgs, label: 'Bot Msgs', color: '#374151' },
         { value: humanMsgs, label: 'Agent Msgs', color: '#374151' },
       ].map(s => `
     <div class="stat-card">
@@ -5833,15 +5801,15 @@
       Object.values(_charts).forEach(ch => { try { ch.destroy(); } catch (e) { } });
       Object.keys(_charts).forEach(k => delete _charts[k]);
 
-      // ── Brand pie ───────────────────────────────────────────────
+      // ── Brand pie (single brand — Non-Medical Tourism) ──────────
       _charts.brand = new Chart(document.getElementById('chart-brand'), {
         type: 'doughnut',
         data: {
-          labels: ['Ulink (Shield)', 'Singlife (Travel)', 'Other'],
+          labels: ['Non-Medical Tourism'],
           datasets: [{
-            data: [ulink, singlife, Math.max(0, total - ulink - singlife)],
-            backgroundColor: ['#fce7f3', '#dbeafe', '#e5e7eb'],
-            borderColor: ['#db2777', '#2563eb', '#9ca3af'], borderWidth: 2
+            data: [total],
+            backgroundColor: ['#dbeafe'],
+            borderColor: ['#2563eb'], borderWidth: 2
           }]
         },
         options: {
