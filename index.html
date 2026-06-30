@@ -2560,7 +2560,7 @@
       </div>
 
       <!-- CRM Template Analytics -->
-      <p class="analytics-section-title" style="margin-top:28px;">CRM Template Analytics</p>
+      <p class="analytics-section-title" style="margin-top:28px;">Template Message Analytics</p>
       <div id="tmpl-analytics-section"
         style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:18px;">
         <div style="color:#6b7280;font-size:13px;">Loading template stats…</div>
@@ -5336,6 +5336,24 @@
           console.error('Failed to save template message to Supabase:', dbErr);
         }
 
+        // ── Log to template_sends for analytics ──
+        try {
+          await sbPost('crm_template_logs', {
+            session_id: baseSessionId,
+            phone_number: toPhone,
+            branch: selectedConv.branch || 'nonmedical',
+            template_name: _selectedTmpl.name,
+            template_lang: tmplLang,
+            params: paramValues,
+            customer_name: selectedConv.whatsapp_name || selectedConv.customer_name || '',
+            send_status: 'sent',
+            meta_message_id: n8nData.wamid || null,
+            sent_at: new Date().toISOString()
+          });
+        } catch (logErr) {
+          console.error('Failed to log template send for analytics:', logErr);
+        }
+
         closeSendTmplModal();
         showToast('✓ Template sent to ' + (selectedConv.whatsapp_name || toPhone));
         setTimeout(loadMessages, 1500);
@@ -5486,6 +5504,22 @@
           let n8nData = {};
           try { n8nData = n8nRes.ok ? await n8nRes.json() : {}; } catch (_) { }
           if (n8nData.success && n8nData.session_id) n8nSessionId = n8nData.session_id;
+        }
+
+        // ── Log to template_sends for analytics ──
+        try {
+          await sbPost('crm_template_logs', {
+            session_id: n8nSessionId || (phone + '_nonmedical'),
+            phone_number: phone,
+            branch: branch || 'nonmedical',
+            template_name: _newChatSelectedTmpl.name,
+            template_lang: _newChatSelectedTmpl.language || 'en',
+            params: bodyParams.map(p => p.text),
+            send_status: 'sent',
+            sent_at: new Date().toISOString()
+          });
+        } catch (logErr) {
+          console.error('Failed to log template send for analytics:', logErr);
         }
 
         closeNewChatModal();
@@ -5815,22 +5849,39 @@
       if (!section) return;
       section.innerHTML = '<div style="color:#6b7280;font-size:13px;">Loading template stats…</div>';
       try {
-        const data = await sbGetAll('crm_template_logs?select=template_name,send_status,replied_at,phone_number,created_at,failure_code');
+        const data = await sbGetAll('crm_template_logs?select=template_name,send_status,replied_at,sent_at,phone_number,created_at,failure_code');
         if (!data || data.length === 0) {
-          section.innerHTML = '<p style="font-size:13px;color:#6b7280;padding:4px;">No CRM template data yet. Data will appear here after the first template is sent via Zoho CRM.</p>';
+          section.innerHTML = '<p style="font-size:13px;color:#6b7280;padding:4px;">No template send data yet. Data will appear here after the first template is sent from this dashboard (Send Template / New Chat).</p>';
           return;
         }
 
         // Summary counts
         const total = data.length;
+        const outbound = data.filter(r => ['queued', 'sent', 'delivered', 'read'].includes(r.send_status)).length;
         const delivered = data.filter(r => ['delivered', 'read'].includes(r.send_status)).length;
         const read = data.filter(r => r.send_status === 'read').length;
         const failed = data.filter(r => r.send_status === 'failed').length;
         const noPhone = data.filter(r => r.send_status === 'no_phone').length;
         const replied = data.filter(r => r.replied_at).length;
-        const outbound = data.filter(r => ['queued', 'sent', 'delivered', 'read'].includes(r.send_status)).length;
         const noReply = data.filter(r => !r.replied_at && ['sent', 'delivered', 'read'].includes(r.send_status)).length;
+
+        const deliveryRate = outbound > 0 ? Math.round(delivered / outbound * 100) : 0;
+        const readRate = delivered > 0 ? Math.round(read / delivered * 100) : 0;
         const replyRate = outbound > 0 ? Math.round(replied / outbound * 100) : 0;
+        const failureRate = total > 0 ? Math.round((failed + noPhone) / total * 100) : 0;
+
+        // Avg response time (sent_at -> replied_at), in hours
+        const responseTimes = data
+          .filter(r => r.replied_at && r.sent_at)
+          .map(r => (new Date(r.replied_at) - new Date(r.sent_at)) / 36e5)
+          .filter(h => h >= 0);
+        const avgResponseHrs = responseTimes.length
+          ? (responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
+          : null;
+        const avgResponseLabel = avgResponseHrs === null ? '—'
+          : avgResponseHrs < 1 ? Math.round(avgResponseHrs * 60) + 'm'
+          : avgResponseHrs < 24 ? avgResponseHrs.toFixed(1) + 'h'
+          : (avgResponseHrs / 24).toFixed(1) + 'd';
 
         // Per-template breakdown
         const byTemplate = {};
@@ -5855,29 +5906,45 @@
           { value: replied, label: 'Replied', color: '#0891b2' },
           { value: noReply, label: 'No Reply', color: '#b45309' },
           { value: failed + noPhone, label: 'Failed/No Phone', color: '#dc2626' },
-          { value: replyRate + '%', label: 'Reply Rate', color: '#059669' },
+          { value: avgResponseLabel, label: 'Avg Time to Reply', color: '#374151' },
         ].map(s => `<div class="stat-card"><div class="stat-value" style="color:${s.color}">${typeof s.value === 'number' ? s.value.toLocaleString() : s.value}</div><div class="stat-label">${s.label}</div></div>`).join('');
+
+        // Rate cards (the "effectiveness" row)
+        const rateCards = [
+          { value: deliveryRate, label: 'Delivery Rate', color: '#1d4ed8', sub: delivered + '/' + outbound },
+          { value: readRate, label: 'Read Rate', color: '#7c3aed', sub: read + '/' + delivered },
+          { value: replyRate, label: 'Reply Rate (Conversion)', color: '#059669', sub: replied + '/' + outbound },
+          { value: failureRate, label: 'Failure Rate', color: '#dc2626', sub: (failed + noPhone) + '/' + total },
+        ].map(s => `<div class="stat-card" style="border:2px solid ${s.color}22;">
+            <div class="stat-value" style="color:${s.color}">${s.value}%</div>
+            <div class="stat-label">${s.label}</div>
+            <div style="font-size:10px;color:#9ca3af;margin-top:2px;">${s.sub}</div>
+          </div>`).join('');
 
         const tableRows = Object.entries(byTemplate)
           .sort((a, b) => (b[1].sent + b[1].delivered + b[1].read) - (a[1].sent + a[1].delivered + a[1].read))
           .map(([name, t]) => {
             const sentTotal = t.sent;
-            const rate = sentTotal > 0 ? Math.round(t.replied / sentTotal * 100) : 0;
+            const deliveryPct = sentTotal > 0 ? Math.round(t.delivered / sentTotal * 100) : 0;
+            const readPct = t.delivered > 0 ? Math.round(t.read / t.delivered * 100) : 0;
+            const replyPct = sentTotal > 0 ? Math.round(t.replied / sentTotal * 100) : 0;
             const failTotal = t.failed + t.noPhone;
             return `<tr>
               <td style="padding:8px 12px;font-weight:600;font-size:13px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(name)}</td>
               <td style="padding:8px 12px;text-align:center;">${sentTotal}</td>
-              <td style="padding:8px 12px;text-align:center;">${t.delivered}</td>
-              <td style="padding:8px 12px;text-align:center;">${t.read}</td>
+              <td style="padding:8px 12px;text-align:center;">${t.delivered} <span style="color:#9ca3af;font-size:11px;">(${deliveryPct}%)</span></td>
+              <td style="padding:8px 12px;text-align:center;">${t.read} <span style="color:#9ca3af;font-size:11px;">(${readPct}%)</span></td>
               <td style="padding:8px 12px;text-align:center;color:#7c3aed;font-weight:600;">${t.replied}</td>
               <td style="padding:8px 12px;text-align:center;color:#b45309;">${t.noReply}</td>
               <td style="padding:8px 12px;text-align:center;color:${failTotal ? '#dc2626' : '#9ca3af'};">${failTotal}</td>
-              <td style="padding:8px 12px;text-align:center;font-weight:700;color:#059669;">${rate}%</td>
+              <td style="padding:8px 12px;text-align:center;font-weight:700;color:#059669;">${replyPct}%</td>
             </tr>`;
           }).join('');
 
         section.innerHTML = `
-          <div class="stats-grid" style="margin-bottom:16px;">${cards}</div>
+          <div class="stats-grid" style="margin-bottom:10px;">${cards}</div>
+          <p style="font-size:11px;color:#9ca3af;margin:0 0 6px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;">Effectiveness Rates</p>
+          <div class="stats-grid" style="margin-bottom:16px;">${rateCards}</div>
           <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
             <button onclick="exportTemplateCsv()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer;font-weight:600;">&#11015; Export CSV</button>
           </div>
