@@ -4709,7 +4709,11 @@
         const sendDisabled = !approved ? 'Only APPROVED templates can be sent'
           : !hasConv ? 'Select a conversation first' : '';
         const actionHtml = approved
-          ? `<button class="tmpl-send-btn" ${sendDisabled ? 'disabled title="' + sendDisabled + '"' : ''} onclick="openSendModal('${escAttr(t.name)}')">Send</button>`
+          ? `<div class="tmpl-action-group">
+               <button class="tmpl-send-btn" ${sendDisabled ? 'disabled title="' + sendDisabled + '"' : ''} onclick="openSendModal('${escAttr(t.name)}')">Send</button>
+               <button class="tmpl-edit-btn" onclick="editTemplate('${escAttr(t.name)}')" title="Copy content to Create form to make a new version">&#9998; Edit</button>
+               <button class="tmpl-delete-btn" onclick="deleteTemplate('${escAttr(t.name)}','${escAttr(t.id || '')}')" title="Delete this template from Meta">&#128465; Delete</button>
+             </div>`
           : `<div class="tmpl-action-group">
                <button class="tmpl-edit-btn" onclick="editTemplate('${escAttr(t.name)}')" title="Copy content to Create form for resubmission">&#9998; Edit</button>
                <button class="tmpl-delete-btn" onclick="deleteTemplate('${escAttr(t.name)}','${escAttr(t.id || '')}')" title="Delete this template from Meta">&#128465; Delete</button>
