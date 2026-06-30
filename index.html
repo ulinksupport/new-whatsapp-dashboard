@@ -4213,6 +4213,7 @@
     // ─────────────────────────────────────────────────────────────
     async function exportMonthlyToN8n() {
       const monthInput = document.getElementById('export-month-picker').value;
+
       if (!monthInput) {
         showToast('Please select a month first.');
         return;
@@ -4224,82 +4225,198 @@
       }
 
       const btn = document.getElementById('export-month-btn');
+
       btn.disabled = true;
-      btn.textContent = 'Preparing…';
+      btn.textContent = 'Preparing...';
+
+      function stripSessionSuffix(sessionId) {
+        return String(sessionId || '').replace(/_(travel|shield|nonmedical)$/, '');
+      }
+
+      function uniqueValues(values) {
+        return Array.from(
+          new Set(
+            values
+              .filter(Boolean)
+              .map(v => String(v).trim())
+              .filter(Boolean)
+          )
+        );
+      }
+
+      function getSingaporeMonthKey(isoTimestamp) {
+        if (!isoTimestamp) return '';
+
+        const dateKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Singapore',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(new Date(isoTimestamp));
+
+        return dateKey.slice(0, 7);
+      }
+
+      function roleLabelForExport(m) {
+        if (m.role === 'user') return 'Customer';
+        if (m.role === 'assistant') return 'Bot';
+        if (m.role === 'human_agent') {
+          return 'Human Agent' + (m.agent_name ? ' (' + m.agent_name + ')' : '');
+        }
+        return m.role || 'Unknown';
+      }
+
+      function makeMessageKey(row) {
+        return [
+          row['Session ID'] || '',
+          row['Source Session ID'] || '',
+          row['Timestamp'] || '',
+          row['Role'] || '',
+          row['Message Content'] || '',
+          row['Media URL'] || ''
+        ].join('|');
+      }
 
       try {
-        const seenBases = new Set();
-        const uniqueConvs = conversations.filter(c => {
-          const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
-          if (seenBases.has(base)) return false;
-          seenBases.add(base);
-          return true;
-        });
+        if (!N8N_BASE_URL) {
+          throw new Error('n8n Webhook Base URL is not configured in Settings.');
+        }
 
         const exportData = [];
-        const total = uniqueConvs.length;
-        let done = 0;
+        const processedConversationKeys = new Set();
+        const seenMessageKeys = new Set();
 
-        for (const c of uniqueConvs) {
-          const base = c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
-          const msgs = await sbGetAll(
-            'messages?session_id=eq.' + encodeURIComponent(base) +
-            '&select=*&order=created_at.asc'
-          );
+        let processed = 0;
 
-          const name = c.whatsapp_name || c.customer_name || c.phone_number || 'Unknown';
-          const branch = (c.branch || '').toUpperCase();
+        for (const c of conversations) {
+          const rawSessionId = String(c.session_id || '').trim();
+          if (!rawSessionId) continue;
 
-          for (const m of msgs) {
-            if (!m.created_at) continue;
-            const msgMonth = m.created_at.slice(0, 7); // "YYYY-MM" form
-            if (msgMonth === monthInput) {
-              const roleLabel =
-                m.role === 'user' ? 'Customer' :
-                  m.role === 'assistant' ? 'Bot' :
-                    m.role === 'human_agent' ? ('Human Agent' + (m.agent_name ? ' (' + m.agent_name + ')' : '')) : (m.role || 'Unknown');
+          const baseId = stripSessionSuffix(rawSessionId);
+          const conversationKey = baseId || rawSessionId;
 
-              exportData.push({
-                "Session ID": c.session_id,
-                "Customer Name": name,
-                "Phone": c.phone_number || '',
-                "Branch": branch,
-                "Timestamp": m.created_at,
-                "Role": roleLabel,
-                "Message Content": m.content || ''
-              });
+          if (processedConversationKeys.has(conversationKey)) {
+            continue;
+          }
+
+          processedConversationKeys.add(conversationKey);
+
+          const sessionCandidates = uniqueValues([
+            rawSessionId,
+            baseId,
+            baseId + '_nonmedical',
+            baseId + '_shield',
+            baseId + '_travel'
+          ]);
+
+          const customerName =
+            c.whatsapp_name ||
+            c.customer_name ||
+            c.phone_number ||
+            'Unknown';
+
+          const phone =
+            c.phone_number ||
+            conversationKey;
+
+          for (const sessionId of sessionCandidates) {
+            const msgs = await sbGetAll(
+              'messages?session_id=eq.' +
+              encodeURIComponent(sessionId) +
+              '&select=*&order=created_at.asc'
+            );
+
+            for (const m of msgs || []) {
+              if (!m.created_at) continue;
+
+              const msgMonth = getSingaporeMonthKey(m.created_at);
+
+              if (msgMonth !== monthInput) {
+                continue;
+              }
+
+              const row = {
+                'Export Month': monthInput,
+                'Session ID': conversationKey,
+                'Source Session ID': m.session_id || sessionId,
+                'Customer Name': customerName,
+                'Phone': phone,
+                'Branch': 'Non-Medical Tourism',
+                'Timestamp': m.created_at,
+                'Role': roleLabelForExport(m),
+                'Message Content': m.content || '',
+                'Media URL': m.media_url || '',
+                'Media Type': m.media_type || '',
+                'Original Media Filename': m.media_filename || ''
+              };
+
+              row['Message Key'] = makeMessageKey(row);
+
+              if (seenMessageKeys.has(row['Message Key'])) {
+                continue;
+              }
+
+              seenMessageKeys.add(row['Message Key']);
+              exportData.push(row);
             }
           }
 
-          done++;
-          btn.textContent = `Gathering ${done}/${total}…`;
-          // Small delay to prevent browser freeze
+          processed++;
+
+          btn.textContent =
+            'Gathering ' +
+            processed +
+            '/' +
+            conversations.length +
+            '...';
+
           await new Promise(r => setTimeout(r, 10));
         }
 
-        if (exportData.length === 0) {
-          showToast(`No messages found for ${monthInput}.`);
+        if (!exportData.length) {
+          showToast('No messages found for ' + monthInput + '.');
           btn.disabled = false;
           btn.textContent = 'Export Month';
           return;
         }
 
-        btn.textContent = 'Sending to n8n…';
+        btn.textContent = 'Sending to n8n...';
 
         const payload = {
           month: monthInput,
+          timezone: 'Asia/Singapore',
+          export_type: 'monthly_chat_export',
           data: exportData
         };
 
-        const res = await fetch(n8nWebhookUrl('3132ffeb-77ac-4d81-a35a-6b3e13e5ec84'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+        const res = await fetch(
+          n8nWebhookUrl('3132ffeb-77ac-4d81-a35a-6b3e13e5ec84'),
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          }
+        );
 
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(
+            'HTTP ' +
+            res.status +
+            (errorText ? ': ' + errorText.slice(0, 300) : '')
+          );
+        }
 
-        showToast(`Successfully exported ${exportData.length} messages to n8n.`);
+        showToast(
+          'Successfully exported ' +
+          exportData.length +
+          ' messages to n8n.'
+        );
+
+        closeExportMonthMenu();
+
       } catch (e) {
         alert('Export to n8n failed: ' + e.message);
       }
