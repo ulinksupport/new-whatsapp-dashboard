@@ -2410,7 +2410,8 @@
         <!-- Brand row -->
         <div id="brand-filters">
           <button id="brand-all" class="filter-btn brand-btn active" onclick="setBrand('all')">All</button>
-          <button id="missed-filter-btn" class="filter-btn" onclick="setFilter('missed')" style="border-color:#dc2626;color:#dc2626;">&#9873; Missing in n8n (0)</button>
+          <button id="missed-filter-btn" class="filter-btn" onclick="setFilter('missed')"
+            style="border-color:#dc2626;color:#dc2626;">&#9873; Missing in n8n (0)</button>
         </div>
         <!-- Status row (shown when a brand is selected) -->
         <div id="status-filters">
@@ -2459,7 +2460,8 @@
               title="Send template message">&#128203; Template</button>
             <div id="mode-toggle" title="Conversation handled by human agent" style="display:none;">
               <button id="btn-ai-mode" class="mode-btn" style="display:none;"></button>
-              <button id="btn-human-mode" class="mode-btn active" style="pointer-events:none;opacity:.7;">👤 Human Agent</button>
+              <button id="btn-human-mode" class="mode-btn active" style="pointer-events:none;opacity:.7;">👤 Human
+                Agent</button>
             </div>
             <button id="close-chat-btn" onclick="closeChat()" title="Close this conversation and notify ops">&#10005;
               Close Chat</button>
@@ -2468,7 +2470,8 @@
 
         <div id="messages-area"></div>
 
-        <div id="human-mode-notice" style="display:none;">&#128993; Human mode active — bot is paused. You are replying directly.</div>
+        <div id="human-mode-notice" style="display:none;">&#128993; Human mode active — bot is paused. You are replying
+          directly.</div>
 
         <!-- 24hr inactivity banner with big template CTA -->
         <div id="inactive-banner">
@@ -4361,7 +4364,6 @@
       const selectedDate =
         document.getElementById('custom-export-date-picker').value;
 
-      // Safety check: webhook must never execute without a selected date
       if (!selectedDate) {
         showToast('Please select a date first.');
         return;
@@ -4375,7 +4377,7 @@
       const btn = document.getElementById('custom-export-btn');
 
       btn.disabled = true;
-      btn.textContent = 'Preparing…';
+      btn.textContent = 'Preparing...';
 
       try {
         if (!N8N_BASE_URL) {
@@ -4383,31 +4385,94 @@
         }
 
         const exportData = [];
-        const processedSessions = new Set();
+        const processedConversationKeys = new Set();
+        const seenMessageKeys = new Set();
 
-        // Export all Ulink Non-Medical Tourism conversations.
-        const singlifeConversations = conversations;
+        function stripSessionSuffix(sessionId) {
+          return String(sessionId || '').replace(/_(travel|shield|nonmedical)$/, '');
+        }
+
+        function uniqueValues(values) {
+          return Array.from(
+            new Set(
+              values
+                .filter(Boolean)
+                .map(v => String(v).trim())
+                .filter(Boolean)
+            )
+          );
+        }
+
+        function messageKey(m) {
+          return m.id || [
+            m.session_id || '',
+            m.created_at || '',
+            m.role || '',
+            m.content || '',
+            m.media_url || ''
+          ].join('|');
+        }
+
+        function roleLabelForExport(m) {
+          if (m.role === 'user') return 'Customer';
+          if (m.role === 'assistant') return 'Bot';
+          if (m.role === 'human_agent') {
+            return 'Human Agent' + (m.agent_name ? ' (' + m.agent_name + ')' : '');
+          }
+          return m.role || 'Unknown';
+        }
 
         let processed = 0;
 
-        for (const c of singlifeConversations) {
+        for (const c of conversations) {
+          const rawSessionId = String(c.session_id || '').trim();
+          if (!rawSessionId) continue;
 
-          // Messages are stored using the base session ID
-          const baseSessionId =
-            c.session_id.replace(/_(travel|shield|nonmedical)$/, '');
+          const baseId = stripSessionSuffix(rawSessionId);
+          const conversationKey = baseId || rawSessionId;
 
-          // Avoid exporting the same chat twice
-          if (processedSessions.has(baseSessionId)) {
+          if (processedConversationKeys.has(conversationKey)) {
             continue;
           }
 
-          processedSessions.add(baseSessionId);
+          processedConversationKeys.add(conversationKey);
 
-          const msgs = await sbGetAll(
-            'messages?session_id=eq.' +
-            encodeURIComponent(baseSessionId) +
-            '&select=*&order=created_at.asc'
-          );
+          const sessionCandidates = uniqueValues([
+            rawSessionId,
+            baseId,
+            baseId + '_nonmedical',
+            baseId + '_shield',
+            baseId + '_travel'
+          ]);
+
+          const allSessionMessages = [];
+
+          for (const sessionId of sessionCandidates) {
+            const msgs = await sbGetAll(
+              'messages?session_id=eq.' +
+              encodeURIComponent(sessionId) +
+              '&select=*&order=created_at.asc'
+            );
+
+            for (const m of msgs || []) {
+              const key = messageKey(m);
+              if (seenMessageKeys.has(key)) continue;
+
+              seenMessageKeys.add(key);
+              allSessionMessages.push(m);
+            }
+          }
+
+          const hasMessageOnSelectedDate = allSessionMessages.some(m => {
+            return m.created_at && getSingaporeDateKey(m.created_at) === selectedDate;
+          });
+
+          if (!hasMessageOnSelectedDate) {
+            processed++;
+            btn.textContent =
+              'Preparing ' + processed + '/' + conversations.length + '...';
+            continue;
+          }
 
           const customerName =
             c.whatsapp_name ||
@@ -4417,47 +4482,30 @@
 
           const phone =
             c.phone_number ||
-            baseSessionId;
+            conversationKey;
 
-          for (const m of msgs) {
-            if (!m.created_at) continue;
-
-            // Export only messages matching the selected date in Singapore time
-            if (getSingaporeDateKey(m.created_at) !== selectedDate) {
-              continue;
-            }
-
-            const roleLabel =
-              m.role === 'user'
-                ? 'Customer'
-                : m.role === 'assistant'
-                  ? 'Bot'
-                  : m.role === 'human_agent'
-                    ? ('Human Agent' + (m.agent_name ? ' (' + m.agent_name + ')' : ''))
-                    : (m.role || 'Unknown');
-
-            exportData.push({
-              "Session ID": baseSessionId,
-              "Customer Name": customerName,
-              "Phone": phone,
-              "Branch": "Singlife",
-              "Timestamp": m.created_at,
-              "Role": roleLabel,
-              "Message Content": m.content || '',
-              "Media URL": m.media_url || '',
-              "Media Type": m.media_type || '',
-              "Original Media Filename": m.media_filename || ''
+          allSessionMessages
+            .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
+            .forEach(m => {
+              exportData.push({
+                'Session ID': conversationKey,
+                'Source Session ID': m.session_id || rawSessionId,
+                'Customer Name': customerName,
+                'Phone': phone,
+                'Branch': 'Non-Medical Tourism',
+                'Timestamp': m.created_at,
+                'Role': roleLabelForExport(m),
+                'Message Content': m.content || '',
+                'Media URL': m.media_url || '',
+                'Media Type': m.media_type || '',
+                'Original Media Filename': m.media_filename || ''
+              });
             });
-          }
 
           processed++;
 
           btn.textContent =
-            'Preparing ' +
-            processed +
-            '/' +
-            singlifeConversations.length +
-            '…';
+            'Preparing ' + processed + '/' + conversations.length + '...';
         }
 
         if (!exportData.length) {
@@ -4472,7 +4520,7 @@
           return;
         }
 
-        btn.textContent = 'Sending…';
+        btn.textContent = 'Sending...';
 
         const response = await fetch(
           n8nWebhookUrl('befae09e-1529-4208-af80-bfa2b38ff290'),
@@ -4506,12 +4554,12 @@
           response.headers.get('Content-Disposition') || '';
 
         const filenameMatch =
-          disposition.match(/filename="?([^"]+)"?/i);
+          disposition.match(/filename="?([^";]+)"?/i);
 
         const zipFilename =
           filenameMatch && filenameMatch[1]
             ? filenameMatch[1]
-            : 'Singlife_WA_Audit_' + selectedDate + '.zip';
+            : 'Non-Medical_Tourism_WA_Audit_' + selectedDate + '.zip';
 
         const downloadUrl =
           URL.createObjectURL(zipBlob);
@@ -4536,7 +4584,7 @@
         closeCustomExportMenu();
 
         showToast(
-          '✓ Singlife WA Audit ZIP downloaded for ' +
+          '✓ Non-Medical Tourism WA Audit ZIP downloaded for ' +
           selectedDate,
           6000
         );
@@ -4545,7 +4593,6 @@
         alert('Custom export failed: ' + error.message);
       }
 
-      // Re-enable because a date remains selected
       btn.disabled = false;
       btn.textContent = 'Custom Export Chat';
     }
